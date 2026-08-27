@@ -32,6 +32,18 @@ device** — only flashing needs hardware.
 **If `esphome` isn't installed:** `pip install esphome` (or `uv tool install esphome`), or use
 the ESPHome dashboard's **Validate** / **Install → Manually** which runs the same two stages.
 
+**First compile on a machine is slow and can fail on a missing system package.** ESPHome
+downloads the full ESP-IDF toolchain (can be 1-2GB) on the first compile for a given chip —
+expect this to take a while and check available disk space first. On Debian/Ubuntu, the
+toolchain's own Python venv setup can fail with a `venv`/`ensurepip` error if
+`python3.<minor>-venv` (matching the system's default `python3 --version`) isn't installed —
+`sudo apt install python3.<minor>-venv` fixes it. The toolchain download itself is cached
+(`~/.cache/esphome`) and only needs to succeed once; a config-only change that changes no
+sdkconfig-affecting option (chip/framework/psram/major component settings) triggers a fast
+incremental rebuild, but sdkconfig-affecting changes (e.g. `logger: hardware_uart`, memory
+options) force a full rebuild of every object file — budget for that when planning several
+config-tuning iterations in a row.
+
 ## Flash + verify (needs the device)
 
 `esphome run <file>.yaml` (USB or OTA) flashes and streams logs. Verify: boots, Wi-Fi + HA API

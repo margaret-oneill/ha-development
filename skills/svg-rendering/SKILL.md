@@ -391,7 +391,7 @@ for i in 0..N:
 
 5. **Gradient on stroke.** Use `gradientUnits="userSpaceOnUse"` with absolute coordinates. `objectBoundingBox` on stroked paths produces unpredictable mapping.
 
-6. **XML comments cannot contain `--`.** `<!-- This is -- invalid -->` breaks parsing. Rephrase or use alternatives.
+6. **XML comments cannot contain `--`.** `<!-- This is -- invalid -->` breaks parsing. This applies to every comment in the file, not just gauge-related ones — watch for `----` divider comments (use `====` instead) and `--` used as a prose em-dash (use `;`, `,`, or parentheses instead). See the universal checklist in section 12a, including the Grep-based verification step to catch this before saving.
 
 7. **fill defaults to black.** Always set `fill="none"` on shapes that should be outline-only.
 
@@ -679,13 +679,40 @@ Temp hot:  #FF3000
 
 ## 12. Rendering Checklist
 
-Before finalizing any SVG mockup, verify each item:
+### 12a. Universal checklist — every SVG mockup, gauges or not
+
+Run this against **every** SVG before saving, including plain layouts (cards,
+switches, toggles, dividers) that contain no gauge at all:
+
+- [ ] **No `--` in XML comments.** This breaks the file for any real XML/SVG
+      parser (browsers included) even though many text editors render it
+      without complaint, so it's easy to miss until the user actually opens
+      the file. It is NOT limited to gauge mockups — it breaks any comment,
+      anywhere in the file. Common ways this sneaks in:
+      - ASCII section dividers like `<!-- ---- Section ---- -->` or
+        `<!-- ==Section== -->` written with hyphens. **Use `=` instead of
+        `-` for divider characters**, e.g. `<!-- ==== Section ==== -->`.
+      - Using `--` as a prose em-dash inside comment text (e.g. "brightness
+        -- reinforces the direction"). **Use `;`, `,`, or parentheses
+        instead of `--` inside comments.**
+      - **Verification step (do this, don't just remember the rule):**
+        after writing the file, use the Grep tool on the saved SVG path
+        with pattern `<!--[^>]*--[^>]*-->|<!--(.|\n)*?--(.|\n)*?-->` (or
+        simply re-Read the file and manually scan every `<!-- ... -->`
+        block for a `--` that isn't the closing `-->`). Fix any hits before
+        considering the mockup done.
+- [ ] **Text uses dominant-baseline="central":** All centered text must have
+      this.
+- [ ] **Gradient uses userSpaceOnUse:** All stroke/fill gradients use
+      absolute coordinates, not `objectBoundingBox`.
+
+### 12b. Gauge-specific checklist
+
+Additionally verify these for any mockup containing a semicircular gauge,
+compass, or arc-based meter:
 
 - [ ] **Layer order correct:** background -> arc -> ticks -> crop circle -> needle -> cap -> text -> min/max -> name/icon
 - [ ] **Crop circle present:** Filled circle matching card background color, placed AFTER arc but BEFORE needle and text
-- [ ] **Text uses dominant-baseline="central":** All centered text must have this
-- [ ] **Gradient uses userSpaceOnUse:** All stroke gradients use absolute coordinates
-- [ ] **No `--` in XML comments**
 - [ ] **Name/icon above arc:** Clear vertical space between label and arc top
 - [ ] **Value text inside cropped area:** Positioned at gauge center, vertically within crop circle bounds
 - [ ] **Min/max below diameter line:** y = cy + gap (6px), not overlapping the arc

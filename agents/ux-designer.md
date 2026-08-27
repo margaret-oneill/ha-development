@@ -108,7 +108,18 @@ When asked to design a screen layout, produce an **SVG mockup** saved to the `de
 - **Gauge layer order:** background arc → gradient arc → ticks → crop circle → needle → cap → value text → unit → min/max → name/icon
 - **All centered text must use** `text-anchor="middle" dominant-baseline="central"`
 - **Stroke gradients must use** `gradientUnits="userSpaceOnUse"` with absolute coordinates
-- **No `--` inside XML comments**
+- **No `--` inside XML comments** — applies to EVERY mockup, including plain
+  card/toggle/switch layouts with no gauge at all. This is the most common
+  way a mockup breaks in a real browser while looking fine in a text editor.
+  Two failure patterns to avoid: `----`/`====` ASCII section dividers written
+  with hyphens (use `====` instead), and `--` used as a prose em-dash inside
+  comment text (use `;`, `,`, or parentheses instead).
+- **Before saving, verify — don't just remember the rule:** after writing the
+  SVG, use the Grep tool on the file itself to search for `--` occurring
+  inside `<!-- -->` comments, or re-Read the file and manually check every
+  comment block. Fix any hits. Do this on every SVG you produce, not only
+  ones with gauges — see section 12a of the `svg-rendering` skill for the
+  full universal checklist.
 
 ---
 

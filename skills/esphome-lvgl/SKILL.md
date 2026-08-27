@@ -359,6 +359,123 @@ touchscreen:
   id: my_touch
 ```
 
+### Verified Board: Elecrow CrowPanel Advance 5.0-HMI (ESP32-S3, 800x480)
+
+Also sold as "CrowPanel Advance 5.0-HMI ESP32 AI Display", SKU `DIS02050A-1`
+(ESP32-S3-WROOM-1-N16R8, 8MB PSRAM, 16MB flash, ILI6122/ILI5960 RGB-parallel
+panel, GT911 touch). **Do not confuse with the differently-named "CrowPanel
+Advanced"** (note: Advanced, not Advance) — that one uses an ESP32-**P4**
+with a separate ESP32-C6 WiFi co-processor and is a completely different
+board.
+
+**The ESPHome community reference for this board
+(devices.esphome.io/devices/elecrow-5inch-esp32-display/) has WRONG pins
+and timing.** It compiles cleanly, matches the product page, and produces a
+fully black screen with a working backlight and zero logged errors — a
+correctness bug, not a missing-feature gap, so nothing about ESPHome will
+warn you. Confirmed identical across every hardware revision (V1.0/V1.1/V1.2)
+by checking Elecrow's own factory firmware source directly:
+github.com/Elecrow-RD/CrowPanel-Advance-5.0-HMI-ESP32-AI-Display-800x480,
+`factory_sourcecode/*/LovyanGFX_Driver.h`. Use the values below instead.
+
+```yaml
+esp32:
+  variant: esp32s3
+  flash_size: 16MB
+  flash_mode: dio
+  framework:
+    type: esp-idf
+    sdkconfig_options:
+      CONFIG_ESP32S3_DATA_CACHE_64KB: y
+      CONFIG_SPIRAM_FETCH_INSTRUCTIONS: y
+      CONFIG_SPIRAM_RODATA: y
+  # This board's undocumented I2C "controller" chip (0x30, see i2c: below)
+  # must be woken up before the display will show anything -- see on_boot.
+  on_boot:
+    priority: 600
+    then:
+      - lambda: |-
+          uint8_t cmd = 0x18;
+          auto err = id(board_i2c).write(0x30, &cmd, 1);
+          ESP_LOGD("boot", "Sent panel-enable command to I2C 0x30, result: %d", (int) err);
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+logger:
+  # ESP32-S3's native USB peripheral defaults to claiming this for its own
+  # USB-Serial-JTAG console; this board's USB port is wired to a separate
+  # CH340 UART bridge instead, so logs never reach it unless forced to UART0.
+  hardware_uart: UART0
+
+# Real I2C bus (GT911 touch AND the board's own power/backlight/mute
+# controller chip) -- NOT GPIO19/20 as the community reference claims.
+i2c:
+  id: board_i2c
+  sda: GPIO15
+  scl: GPIO16
+  scan: true   # will show devices at 0x30 (controller, wake it via on_boot
+               # above), 0x51 (unused here -- likely audio-related, this
+               # board also has mic.c/mic.h in its factory source), 0x5D
+               # (GT911 touch -- ESPHome's gt911 component auto-detects
+               # this address correctly, no need to set it explicitly)
+
+touchscreen:
+  platform: gt911
+  id: my_touch
+
+output:
+  - platform: ledc
+    pin: 2
+    frequency: 1220
+    id: gpio_backlight_pwm
+
+light:
+  - platform: monochromatic
+    output: gpio_backlight_pwm
+    name: Display Backlight
+    id: back_light
+    restore_mode: ALWAYS_ON
+
+display:
+  - platform: rpi_dpi_rgb   # deprecated in favor of mipi_rgb; kept for now,
+                            # migration not required for this to work
+    id: main_display
+    color_order: RGB
+    invert_colors: true
+    update_interval: never
+    auto_clear_enabled: false
+    dimensions:
+      width: 800
+      height: 480
+    de_pin: 42
+    hsync_pin: 40
+    vsync_pin: 41
+    pclk_pin: 39
+    pclk_frequency: 21MHz
+    hsync_pulse_width: 4
+    hsync_back_porch: 8
+    hsync_front_porch: 8
+    vsync_pulse_width: 4
+    vsync_back_porch: 8
+    vsync_front_porch: 8
+    data_pins:
+      red: [7, 17, 18, 3, 46]
+      green: [9, 10, 11, 12, 13, 14]
+      blue: [21, 47, 48, 45, 38]
+```
+
+**Also confirmed on this board:** `lvgl: buffer_size` should be left at its
+true default (**100%** — confirmed via boot log; do not assume a small
+implicit default). Reducing it caused intermittent WiFi
+auth/association/handshake failures (a different failure reason each
+time — a timing/interrupt-contention signature, not a network problem) by
+starving the WiFi stack with more-frequent high-priority RGB-LCD refresh
+interrupts. See the general buffer_size guidance above (section 5) for the
+full mechanism — this cost hours of debugging down a network/router/antenna
+path before the real cause was found on this exact board.
+
 ### Backlight Control Pattern
 
 ```yaml
@@ -922,8 +1039,32 @@ LVGL (Light and Versatile Graphics Library) is an ESPHome component that provide
 5. **Buffer size guidance:**
    - Without PSRAM: `buffer_size: 25%`
    - With PSRAM prioritizing speed: `buffer_size: 12%` (internal RAM)
-   - Default: 100% (fallback to 12% if allocation fails)
-   - **WARNING:** On large RGB displays (e.g. 800x480 via rpi_dpi_rgb), `buffer_size: 100%` = 768KB, which causes OOM, kills WiFi/API, and makes the display blink. Omit `buffer_size` (default ~10%) or set an explicit small value.
+   - Default when omitted: 100% (confirmed via boot log dump, not a small
+     implicit default — don't assume otherwise)
+   - **This is a real tradeoff with two DIFFERENT failure modes depending
+     on which way you get it wrong — test both directions if WiFi or
+     display behaves oddly, don't just pick one and assume it's safe:**
+     - *Too large* (100% on internal RAM, no PSRAM, or genuinely
+       memory-constrained): can OOM, which can crash/kill WiFi+API and
+       make the display blink. This is the traditionally-documented risk.
+     - *Too small* (confirmed concretely on an Elecrow CrowPanel 5"
+       ESP32-S3, `rpi_dpi_rgb`, 8MB PSRAM): a smaller buffer means the LVGL
+       display driver must run proportionally MORE refresh/flush cycles to
+       cover the same screen, each one triggering a high-priority RGB-LCD
+       DMA-completion interrupt. On real hardware this manifested as
+       **intermittent WiFi association/auth failures** (varying failure
+       reason each time — auth timeout, association timeout, 4-way
+       handshake timeout — a signature of interrupt/timing contention, not
+       a credentials or RF problem) at `buffer_size: 25%`, which fully
+       resolved by raising it back to `100%`. This looked exactly like a
+       network/router/antenna problem for hours of debugging before the
+       real cause (an LVGL setting) was found — if WiFi is flaky on an
+       RGB-parallel-display project and the network/credentials/signal all
+       check out, suspect `buffer_size` before suspecting the network.
+   - There's no universally safe default for RGB parallel displays with
+     WiFi — it depends on the specific board's DMA/interrupt behavior.
+     Actually test WiFi stability at whatever buffer_size you pick, not
+     just display rendering.
 
 ---
 
@@ -1274,6 +1415,37 @@ Toggle switch widget.
 
 **Triggers:** `on_value` (any change, x = checked state), `on_change` (user only)
 **Integration:** switch component
+
+**KNOWN CODEGEN BUG (confirmed ESPHome 2026.8.1):** a `switch:` widget's
+top-level `x`/`y`/`width`/`height` are silently dropped by the code
+generator — no `lv_obj_set_style_x/y/width/height` calls get emitted for it
+at all, unlike every other widget type (`obj`, `label`, `slider` all
+generate these correctly). The switch ends up at its parent's default
+origin (typically top-left, stacking multiple switches on top of each
+other/other widgets) with LVGL's default switch size, regardless of what
+you specify. Verify by checking the generated
+`.esphome/build/<name>/src/main.cpp` for the relevant `lv_switch_create`
+call and confirming `lv_obj_set_style_x`/`_y` appear nearby if unsure.
+
+**Workaround:** wrap the switch in a positioned, invisible `obj:` container
+and let the switch fill it — `obj` widgets position correctly:
+```yaml
+- obj:
+    x: 215
+    y: 126
+    width: 96
+    height: 48
+    bg_opa: TRANSP
+    border_width: 0
+    pad_all: 0
+    scrollable: false
+    widgets:
+      - switch:
+          id: my_switch
+          width: 96
+          height: 48
+          # ...
+```
 
 ### checkbox
 Toggle with tick box and label.
@@ -2149,6 +2321,39 @@ When implementing a page or feature, verify:
 - **Cause:** Each ESPHome device must be explicitly authorized to perform HA actions
 - **Fix:** In Home Assistant: Settings → Devices & Services → ESPHome → select the device → Configure → enable "Allow the device to perform Home Assistant actions"
 - This must be set for **each new ESPHome device** -- it is not enabled by default
+
+### RGB Parallel Display: Backlight On, Screen Fully Black, No Errors Logged
+This is a distinct failure mode from "Widget Not Visible" above — the whole
+panel shows nothing, not just one widget, and `esphome config`/boot logs show
+no errors anywhere (the `rpi_dpi_rgb`/`mipi_rgb` component has no way to
+detect that the physical panel isn't actually displaying anything, since it
+doesn't communicate with the panel's own driver chip beyond raw video
+timing). Seen concretely on an Elecrow CrowPanel 5" (ILI6122/ILI5960): the
+**ESPHome community reference config for the exact board model was simply
+wrong** — incorrect DE/HSYNC/VSYNC/PCLK and data pin assignments, and a
+missing board-specific I2C wake-up sequence — despite compiling cleanly and
+matching the vendor's product page.
+- **Don't assume a community reference (devices.esphome.io, forum posts) is
+  correct just because it's for the right board model.** If a display stays
+  black with a validated config, correct pins/timing, and a confirmed
+  backlight, cross-check the vendor's own factory firmware source (often on
+  GitHub — search `<vendor> <board model> factory firmware github`) for the
+  actual pin mapping. Arduino/LovyanGFX-based vendor examples usually have a
+  driver config header (e.g. `LovyanGFX_Driver.h`) with the real
+  DE/HSYNC/VSYNC/PCLK/data pins and timing — these can differ completely
+  from community-contributed ESPHome configs.
+- Some of these boards also have an **undocumented onboard I2C controller
+  chip** (often gating backlight/power/mute) that the vendor's `.ino` sends
+  a specific wake-up command byte to, unconditionally, before initializing
+  the display. Check the vendor's `setup()` for any `Wire.write`/I2C calls
+  that happen before their display-init call — an ESPHome `esphome: on_boot:`
+  lambda calling `id(<i2c_bus_id>).write(<address>, &cmd, 1)` can replicate
+  this.
+- Build a **minimal isolated test config** (just `esp32`/`psram`/`logger`/
+  `display`/`lvgl` with one solid-color full-screen widget, no touch, no
+  app entities) to test the base video signal path in isolation before
+  debugging a full app config — much faster to iterate on and rules out
+  app-level widget issues as the cause.
 
 ### Touch Not Responding
 - Verify touchscreen component is configured and listed in `lvgl: touchscreens:`
